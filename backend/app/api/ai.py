@@ -1,6 +1,6 @@
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Body, Query
 from sqlalchemy.orm import Session
-from typing import List, Optional
+from typing import Any, List, Optional
 from datetime import datetime
 
 from app.database import get_db
@@ -85,9 +85,19 @@ async def extract_feedback(conversation_id: int, db: Session = Depends(get_db)):
 
 @router.post("/generate-planting-intent", response_model=PlantingIntentResponse)
 async def generate_planting_intent(
-    conversation_ids: Optional[List[int]] = None,
+    body: Any = Body(None),
     db: Session = Depends(get_db)
 ):
+    conversation_ids: Optional[List[int]] = None
+    if isinstance(body, list):
+        conversation_ids = [int(cid) for cid in body]
+    elif isinstance(body, dict):
+        raw_ids = body.get("conversationIds")
+        if raw_ids is None:
+            raw_ids = body.get("conversation_ids")
+        if raw_ids:
+            conversation_ids = [int(cid) for cid in raw_ids]
+
     query = db.query(Feedback)
     if conversation_ids:
         query = query.filter(Feedback.conversation_id.in_(conversation_ids))
@@ -128,10 +138,13 @@ async def generate_planting_intent(
 
 @router.post("/generate-recipes")
 async def generate_recipes(
-    vegetables: List[str],
-    count: int = 3,
+    vegetables: List[str] = Query(default=[]),
+    vegetables_array: List[str] = Query(default=[], alias="vegetables[]"),
+    count: int = Query(default=3),
     db: Session = Depends(get_db)
 ):
+    if not vegetables:
+        vegetables = vegetables_array
     recipes = await ai_service.generate_recipes(vegetables, count)
 
     saved_recipes = []
@@ -190,8 +203,11 @@ async def generate_meeting_summary(conversation_id: int, db: Session = Depends(g
 @router.get("/summaries")
 def get_ai_summaries(
     summary_type: Optional[str] = None,
+    summaryType: Optional[str] = None,
     db: Session = Depends(get_db)
 ):
+    if summary_type is None:
+        summary_type = summaryType
     query = db.query(AISummary)
     if summary_type:
         query = query.filter(AISummary.summary_type == summary_type)

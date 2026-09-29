@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from typing import List
+from typing import List, Optional
 from datetime import date
 
 from app.database import get_db
@@ -15,8 +15,17 @@ def get_calendar(
     start_date: date = None,
     end_date: date = None,
     activity_type: str = None,
+    startDate: Optional[date] = None,
+    endDate: Optional[date] = None,
+    activityType: Optional[str] = None,
     db: Session = Depends(get_db)
 ):
+    if start_date is None:
+        start_date = startDate
+    if end_date is None:
+        end_date = endDate
+    if activity_type is None:
+        activity_type = activityType
     query = db.query(PlantingCalendar)
     if start_date:
         query = query.filter(PlantingCalendar.activity_date >= start_date)

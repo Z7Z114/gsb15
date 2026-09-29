@@ -110,15 +110,37 @@ H2. 现有 `backend/tests/` 冒烟测试必须保持全绿。
 
 ---
 
-## 已知问题
+## 变更说明
 
-最近在真实使用中暴露出一批现象，以下只是其中一部分，用来帮助定位；**请以「行为规格」为准逐条修复**，
-不要只处理这里列出的几条：
+针对真实使用中暴露的缺陷，按「行为规格」逐条修复，根因与修法如下：
 
-1. 在会话详情页上传音频后，前端提示上传失败，网络面板显示 500。
-2. 上传音频后点击「开始转写」，后端返回「对话没有音频文件」。
-3. 把某位会员的邮箱改成另一位会员已用的邮箱时，接口返回 500。
-4. 种植日历按月份筛选时，选完日期列表没有变化。
-5. 会员对话页按会员筛选时，结果始终返回全部对话。
-6. 生成食谱接口一直返回 422，前端拿不到数据。
-7. 删除一个已经排了农事活动的蔬菜品种时返回 500。
+1. **音频上传 500**（`POST /api/conversations/{id}/upload-audio`）：处理函数引用了未注入的
+   `db` 变量（缺少 `Depends(get_db)`），且未把音频路径写入 Transcript。修复：注入数据库会话；
+   上传成功后 upsert 该会话的 Transcript 并写入 `audio_file_path`，因此随后
+   `GET .../transcript` 能读到同一路径，`POST /api/ai/transcribe/{id}` 不再报「对话没有音频文件」。
+2. **上传文件名未安全化**：原始文件名直接拼进保存路径，含 `..`、`/`、`\` 时可写出上传目录。
+   修复：先把 `\` 归一为 `/` 再取 `os.path.basename`，只保留基名，并在写入前确保上传目录存在。
+3. **同一会话多条 Transcript**：`POST /api/conversations/transcript` 每次无条件插入新行，
+   读取时拿到旧记录。修复：改为按 `conversation_id` 幂等 upsert——已存在则更新同一条记录
+   （返回同一 `id`），保证读到的是最近一次写入。
+4. **会员邮箱冲突 500**：`PUT /api/members/{id}` 直接提交，触发唯一约束的 `IntegrityError`。
+   修复：提交前检查新邮箱是否被**其它**会员占用，冲突返回 400 且不改动数据；无冲突正常更新。
+5. **蔬菜更新主键被改写**：`VegetableUpdate` 含 `id` 字段，更新循环把它 `setattr` 到 ORM 对象上，
+   导致主键被改、原记录消失。修复：更新时 `exclude={"id"}`，请求体 `id` 一律以路径为准忽略，
+   其余字段照常更新。
+6. **删除有日历条目的蔬菜 500**：外键约束下直接删蔬菜触发 `IntegrityError`。修复：删除前级联
+   删除该蔬菜名下所有 `planting_calendar` 条目，删后 `GET /api/calendar` 不再出现这些条目。
+7. **camelCase 查询参数被静默忽略**：前端发 `startDate`/`memberId`/`availableOnly` 等，后端只认
+   snake_case。修复：种植日历、对话、反馈、AI 摘要、蔬菜、会员的列表接口同时声明 camelCase 与
+   snake_case 参数并合并取值，两种写法过滤结果一致；布尔参数由 FastAPI 解析，兼容
+   `true/false`（不分大小写）与 `1/0`。
+8. **生成食谱 422**：`vegetables: List[str]` 被 FastAPI 当作请求体参数，而前端把参数放在 query。
+   修复：改为 `Query` 参数，同时接受 `vegetables` 重复参数与 `vegetables[]` 数组形式及 `count`。
+9. **生成种植意向 422**：原签名只接受裸 JSON 数组。修复：改为读取任意 JSON 请求体并归一化，
+   兼容 `{"conversationIds": [...]}`、`{"conversation_ids": [...]}` 与裸数组 `[1, 2]`，
+   均返回约定的四个字段。
+10. **离线可运行**：以上修复均未引入新的外部调用；未配置 `OPENAI_API_KEY`/`PYANNOTE_AUTH_TOKEN`/
+    SMTP 时，`/api/ai/*` 仍返回结构合法的结果，不发起任何网络请求。
+
+回归保障：新增 `backend/tests/spec_test.py`，逐条对应上述验收点（在未修复的实现上失败）；
+原有 `backend/tests/smoke_test.py` 冒烟测试保持全绿。

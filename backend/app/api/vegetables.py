@@ -1,16 +1,23 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from typing import List
+from typing import List, Optional
 
 from app.database import get_db
-from app.models import Vegetable
+from app.models import Vegetable, PlantingCalendar
 from app.schemas import VegetableCreate, VegetableUpdate, Vegetable as VegetableSchema
 
 router = APIRouter()
 
 
 @router.get("/", response_model=List[VegetableSchema])
-def get_vegetables(season: str = None, available_only: bool = True, db: Session = Depends(get_db)):
+def get_vegetables(
+    season: str = None,
+    available_only: bool = True,
+    availableOnly: Optional[bool] = None,
+    db: Session = Depends(get_db)
+):
+    if availableOnly is not None:
+        available_only = availableOnly
     query = db.query(Vegetable)
     if season:
         query = query.filter(Vegetable.season == season)
@@ -41,7 +48,7 @@ def update_vegetable(vegetable_id: int, vegetable: VegetableUpdate, db: Session 
     db_vegetable = db.query(Vegetable).filter(Vegetable.id == vegetable_id).first()
     if not db_vegetable:
         raise HTTPException(status_code=404, detail="蔬菜品种不存在")
-    for key, value in vegetable.model_dump().items():
+    for key, value in vegetable.model_dump(exclude={"id"}).items():
         setattr(db_vegetable, key, value)
     db.commit()
     db.refresh(db_vegetable)
@@ -53,6 +60,9 @@ def delete_vegetable(vegetable_id: int, db: Session = Depends(get_db)):
     db_vegetable = db.query(Vegetable).filter(Vegetable.id == vegetable_id).first()
     if not db_vegetable:
         raise HTTPException(status_code=404, detail="蔬菜品种不存在")
+    db.query(PlantingCalendar).filter(
+        PlantingCalendar.vegetable_id == vegetable_id
+    ).delete(synchronize_session=False)
     db.delete(db_vegetable)
     db.commit()
     return {"message": "蔬菜品种已删除"}

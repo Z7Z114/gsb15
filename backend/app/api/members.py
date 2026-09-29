@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from typing import List
+from typing import List, Optional
 
 from app.database import get_db
 from app.models import Member
@@ -10,7 +10,14 @@ router = APIRouter()
 
 
 @router.get("/", response_model=List[MemberSchema])
-def get_members(role: str = None, active_only: bool = True, db: Session = Depends(get_db)):
+def get_members(
+    role: str = None,
+    active_only: bool = True,
+    activeOnly: Optional[bool] = None,
+    db: Session = Depends(get_db)
+):
+    if activeOnly is not None:
+        active_only = activeOnly
     query = db.query(Member)
     if role:
         query = query.filter(Member.role == role)
@@ -44,6 +51,11 @@ def update_member(member_id: int, member: MemberCreate, db: Session = Depends(ge
     db_member = db.query(Member).filter(Member.id == member_id).first()
     if not db_member:
         raise HTTPException(status_code=404, detail="会员不存在")
+    email_taken = db.query(Member).filter(
+        Member.email == member.email, Member.id != member_id
+    ).first()
+    if email_taken:
+        raise HTTPException(status_code=400, detail="该邮箱已被其他会员使用")
     for key, value in member.model_dump().items():
         setattr(db_member, key, value)
     db.commit()

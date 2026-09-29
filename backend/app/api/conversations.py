@@ -27,8 +27,11 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 def get_conversations(
     member_id: Optional[int] = None,
     status: Optional[str] = None,
+    memberId: Optional[int] = None,
     db: Session = Depends(get_db)
 ):
+    if member_id is None:
+        member_id = memberId
     query = db.query(Conversation)
     if member_id:
         query = query.filter(Conversation.member_id == member_id)
@@ -78,17 +81,31 @@ def create_message(message: MessageCreate, db: Session = Depends(get_db)):
 
 
 @router.post("/{conversation_id}/upload-audio")
-async def upload_audio(conversation_id: int, audio_file: UploadFile = File(...)):
+async def upload_audio(
+    conversation_id: int,
+    audio_file: UploadFile = File(...),
+    db: Session = Depends(get_db)
+):
     conversation = db.query(Conversation).filter(Conversation.id == conversation_id).first()
     if not conversation:
         raise HTTPException(status_code=404, detail="对话不存在")
 
-    file_location = f"{UPLOAD_DIR}/{conversation_id}_{audio_file.filename}"
+    safe_filename = os.path.basename((audio_file.filename or "").replace("\\", "/")) or "audio"
+    os.makedirs(UPLOAD_DIR, exist_ok=True)
+    file_location = os.path.join(UPLOAD_DIR, f"{conversation_id}_{safe_filename}")
     with open(file_location, "wb") as buffer:
         shutil.copyfileobj(audio_file.file, buffer)
 
+    transcript = db.query(Transcript).filter(Transcript.conversation_id == conversation_id).first()
+    if transcript:
+        transcript.audio_file_path = file_location
+    else:
+        transcript = Transcript(conversation_id=conversation_id, audio_file_path=file_location)
+        db.add(transcript)
+    db.commit()
+
     return {
-        "filename": audio_file.filename,
+        "filename": safe_filename,
         "file_path": file_location,
         "conversation_id": conversation_id
     }
@@ -105,8 +122,15 @@ def create_transcript(transcript: TranscriptCreate, db: Session = Depends(get_db
     conversation = db.query(Conversation).filter(Conversation.id == transcript.conversation_id).first()
     if not conversation:
         raise HTTPException(status_code=404, detail="对话不存在")
-    db_transcript = Transcript(**transcript.model_dump())
-    db.add(db_transcript)
+    db_transcript = db.query(Transcript).filter(
+        Transcript.conversation_id == transcript.conversation_id
+    ).first()
+    if db_transcript:
+        for key, value in transcript.model_dump(exclude={"conversation_id"}).items():
+            setattr(db_transcript, key, value)
+    else:
+        db_transcript = Transcript(**transcript.model_dump())
+        db.add(db_transcript)
     db.commit()
     db.refresh(db_transcript)
     return db_transcript
@@ -128,8 +152,14 @@ def create_feedback(feedback: FeedbackCreate, db: Session = Depends(get_db)):
 def get_feedbacks(
     member_id: Optional[int] = None,
     feedback_type: Optional[str] = None,
+    memberId: Optional[int] = None,
+    feedbackType: Optional[str] = None,
     db: Session = Depends(get_db)
 ):
+    if member_id is None:
+        member_id = memberId
+    if feedback_type is None:
+        feedback_type = feedbackType
     query = db.query(Feedback)
     if member_id:
         query = query.filter(Feedback.member_id == member_id)
